@@ -251,7 +251,7 @@ void SurfacePlane::Allocate() {
   size_t newPitch;
   CudaCtxPush ctxPush(ctx);
   auto res = cuMemAllocPitch(&gpuMem, &newPitch, width * elemSize, height, 16);
-  ThrowOnCudaError(res, __LINE__);
+  //ThrowOnCudaError(res, __LINE__);
   pitch = newPitch;
 
 #ifdef TRACK_TOKEN_ALLOCATIONS

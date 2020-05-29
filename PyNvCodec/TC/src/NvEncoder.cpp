@@ -12,6 +12,7 @@
  */
 
 #include "NvEncoder.h"
+#include "NvEncoderCLIOptions.h"
 using namespace std;
 
 #ifndef _WIN32
@@ -20,13 +21,13 @@ using namespace std;
 
 using namespace std;
 
-static inline bool operator==(const GUID &guid1, const GUID &guid2) {
-  return !memcmp(&guid1, &guid2, sizeof(GUID));
-}
+//static inline bool operator==(const GUID &guid1, const GUID &guid2) {
+//  return !memcmp(&guid1, &guid2, sizeof(GUID));
+//}
 
-static inline bool operator!=(const GUID &guid1, const GUID &guid2) {
-  return !(guid1 == guid2);
-}
+//static inline bool operator!=(const GUID &guid1, const GUID &guid2) {
+//  return !(guid1 == guid2);
+//}
 #endif
 
 void *NvEncoder::GetDevice() const { return m_pDevice; }
@@ -248,7 +249,8 @@ void NvEncoder::CreateDefaultEncoderParams(
   }
 }
 
-void NvEncoder::CreateEncoder(const NV_ENC_INITIALIZE_PARAMS *pEncoderParams) {
+void NvEncoder::CreateEncoder(const NV_ENC_INITIALIZE_PARAMS *pEncoderParams,
+                              CUstream str) {
   if (!m_hEncoder) {
     NVENC_THROW_ERROR("Encoder Initialization failed",
                       NV_ENC_ERR_NO_ENCODE_DEVICE);
@@ -365,6 +367,9 @@ void NvEncoder::CreateEncoder(const NV_ENC_INITIALIZE_PARAMS *pEncoderParams) {
   }
 
   AllocateInputBuffers(m_nEncoderBufferSize);
+#if CHECK_API_VERSION(9, 1)
+  NVENC_API_CALL(m_nvenc.nvEncSetIOCudaStreams(m_hEncoder, &str, &str));
+#endif
 }
 
 void NvEncoder::DestroyEncoder() {
