@@ -14,6 +14,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <torch/extension.h>
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
 
 torch::Tensor makefromDevicePtrUint8(CUdeviceptr ptr, uint32_t width,
                                      uint32_t height, uint32_t pitch,
@@ -32,9 +34,11 @@ torch::Tensor makefromDevicePtrUint8(CUdeviceptr ptr, uint32_t width,
 
   torch::Tensor tensor = torch::full({height, width}, 128, options);
 
+  auto stream = at::cuda::getCurrentCUDAStream();
+
   uint8_t *devMem = tensor.data_ptr<uint8_t>();
-  auto res = cudaMemcpy2D((void *)devMem, width, (const void *)ptr, pitch,
-                          width, height, cudaMemcpyDeviceToDevice);
+  auto res = cudaMemcpy2DAsync((void *)devMem, width, (const void *)ptr, pitch,
+                          width, height, cudaMemcpyDeviceToDevice, stream);
   if (cudaSuccess != res) {
     std::stringstream ss;
     ss << __FUNCTION__;

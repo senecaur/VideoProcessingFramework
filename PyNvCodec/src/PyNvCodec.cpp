@@ -80,33 +80,23 @@ public:
   }
 
   CUcontext GetCtx(size_t idx) {
-    if (idx >= GetNumGpus()) {
-      return nullptr;
-    }
-
-    auto &ctx = g_Contexts[idx];
-    if (!ctx) {
-      CUdevice cuDevice = 0;
+    if (g_Contexts[idx] == nullptr) {
+      CUdevice cuDevice;
+      CUcontext cuContext;
       ThrowOnCudaError(cuDeviceGet(&cuDevice, idx), __LINE__);
-      ThrowOnCudaError(cuCtxCreate(&ctx, 0, cuDevice), __LINE__);
+      ThrowOnCudaError(cuCtxCreate(&cuContext, 0, cuDevice), __LINE__);
+      g_Contexts[idx] = cuContext;
     }
-
-    return g_Contexts[idx];
+    return idx < GetNumGpus() ? g_Contexts[idx] : nullptr;
   }
 
   CUstream GetStream(size_t idx) {
-    if (idx >= GetNumGpus()) {
-      return nullptr;
+    if (g_Streams[idx] == nullptr) {
+      CUstream cuStream = nullptr;
+      ThrowOnCudaError(cuStreamCreate(&cuStream, 0), __LINE__);
+      g_Streams[idx] = cuStream;
     }
-
-    auto &str = g_Streams[idx];
-    if (!str) {
-      auto ctx = GetCtx(idx);
-      CudaCtxPush push(ctx);
-      ThrowOnCudaError(cuStreamCreate(&str, 0), __LINE__);
-    }
-
-    return g_Streams[idx];
+    return idx < GetNumGpus() ? g_Streams[idx] : nullptr;
   }
 
   /* Also a static function as we want to keep all the
@@ -116,16 +106,16 @@ public:
     stringstream ss;
     try {
       for (auto &cuStream : g_Streams) {
-        if (cuStream) {
-          ThrowOnCudaError(cuStreamDestroy(cuStream), __LINE__);
-        }
+          if (cuStream) {
+            ThrowOnCudaError(cuStreamDestroy(cuStream), __LINE__);
+          }
       }
       g_Streams.clear();
 
       for (auto &cuContext : g_Contexts) {
-        if (cuContext) {
-          ThrowOnCudaError(cuCtxDestroy(cuContext), __LINE__);
-        }
+          if (cuContext) {
+            ThrowOnCudaError(cuCtxDestroy(cuContext), __LINE__);
+          }
       }
       g_Contexts.clear();
     } catch (runtime_error &e) {
@@ -152,15 +142,19 @@ class PyFrameUploader {
 
 public:
   PyFrameUploader(uint32_t width, uint32_t height, Pixel_Format format,
-                  uint32_t gpu_ID) {
-    gpuID = gpu_ID;
+                  uint64_t stream) {
+    //gpuID = gpu_ID;
     surfaceWidth = width;
     surfaceHeight = height;
     surfaceFormat = format;
 
+    CUcontext cuContext = nullptr;
+    auto cuStream = (CUstream)stream;
+    auto success = cuStreamGetCtx(cuStream, &cuContext);
+
     uploader.reset(
-        CudaUploadFrame::Make(CudaResMgr::Instance().GetStream(gpuID),
-                              CudaResMgr::Instance().GetCtx(gpuID),
+        CudaUploadFrame::Make(cuStream,//CudaResMgr::Instance().GetStream(gpuID),
+                              cuContext,//CudaResMgr::Instance().GetCtx(gpuID),
                               surfaceWidth, surfaceHeight, surfaceFormat));
   }
 
@@ -238,16 +232,19 @@ public:
 class PySurfaceConverter {
   unique_ptr<ConvertSurface> upConverter;
   Pixel_Format outputFormat;
-  uint32_t gpuId;
+  uint64_t stream;
 
 public:
   PySurfaceConverter(uint32_t width, uint32_t height, Pixel_Format inFormat,
-                     Pixel_Format outFormat, uint32_t gpuID)
-      : gpuId(gpuID), outputFormat(outFormat) {
+                     Pixel_Format outFormat, uint64_t stream)
+      : stream(stream), outputFormat(outFormat) {
+    CUcontext cuContext = nullptr;
+    auto cuStream = (CUstream)stream;
+    auto success = cuStreamGetCtx(cuStream, &cuContext);
     upConverter.reset(
         ConvertSurface::Make(width, height, inFormat, outFormat,
-                             CudaResMgr::Instance().GetCtx(gpuId),
-                             CudaResMgr::Instance().GetStream(gpuId)));
+                             cuContext,//CudaResMgr::Instance().GetCtx(gpuId),
+                             cuStream));//CudaResMgr::Instance().GetStream(gpuId)));
   }
 
   shared_ptr<Surface> Execute(shared_ptr<Surface> surface) {
@@ -261,6 +258,7 @@ public:
     }
 
     auto pSurface = (Surface *)upConverter->GetOutput(0U);
+
     return shared_ptr<Surface>(pSurface ? pSurface->Clone()
                                         : Surface::Make(outputFormat));
   }
@@ -307,14 +305,19 @@ class PyNvDecoder {
   unique_ptr<PySurfaceDownloader> upDownloader;
   uint32_t gpuId;
   static uint32_t const poolFrameSize = 4U;
+  CUstream cuStream;
+  CUcontext cuContext = nullptr;
 
 public:
-  PyNvDecoder(const string &pathToFile, int gpuOrdinal) {
-    if (gpuOrdinal < 0 || gpuOrdinal >= CudaResMgr::Instance().GetNumGpus()) {
-      gpuOrdinal = 0U;
-    }
-    gpuId = gpuOrdinal;
-    cout << "Decoding on GPU " << gpuId << endl;
+  PyNvDecoder(const string &pathToFile, uint64_t stream) {
+    //if (gpuOrdinal < 0 || gpuOrdinal >= CudaResMgr::Instance().GetNumGpus()) {
+    //  gpuOrdinal = 0U;
+    //}
+    //gpuId = gpuOrdinal;
+    //cout << "Decoding on GPU " << gpuId << endl;
+
+    cuStream = (CUstream)stream;
+    auto success = cuStreamGetCtx(cuStream, &cuContext);
 
     upDemuxer.reset(DemuxFrame::Make(pathToFile.c_str()));
 
@@ -322,8 +325,11 @@ public:
     upDemuxer->GetParams(params);
 
     upDecoder.reset(NvdecDecodeFrame::Make(
-        CudaResMgr::Instance().GetStream(gpuId),
-        CudaResMgr::Instance().GetCtx(gpuId), params.videoContext.codec,
+        //CudaResMgr::Instance().GetStream(gpuId),
+        //CudaResMgr::Instance().GetCtx(gpuId),
+        cuStream,
+        cuContext,
+        params.videoContext.codec,
         poolFrameSize, params.videoContext.width, params.videoContext.height));
   }
 
@@ -461,6 +467,8 @@ class PyNvEncoder {
   uint32_t encWidth, encHeight, gpuId;
   Pixel_Format eFormat = NV12;
   NvEncoderInitParam initParam;
+  CUstream cuStream;
+  CUcontext cuContext = nullptr;
 
 public:
   uint32_t Width() const { return encWidth; }
@@ -469,12 +477,15 @@ public:
 
   Pixel_Format GetPixelFormat() const { return eFormat; }
 
-  PyNvEncoder(const map<string, string> &encodeOptions, int gpuOrdinal) {
-    if (gpuOrdinal < 0 || gpuOrdinal >= CudaResMgr::Instance().GetNumGpus()) {
-      gpuOrdinal = 0U;
-    }
-    gpuId = gpuOrdinal;
-    cout << "Encoding on GPU " << gpuId << endl;
+  PyNvEncoder(const map<string, string> &encodeOptions, uint64_t stream) {
+    //if (gpuOrdinal < 0 || gpuOrdinal >= CudaResMgr::Instance().GetNumGpus()) {
+    //  gpuOrdinal = 0U;
+    //}
+    //gpuId = gpuOrdinal;
+    //cout << "Encoding on GPU " << gpuId << endl;
+
+    cuStream = (CUstream)stream;
+    auto success = cuStreamGetCtx(cuStream, &cuContext);
 
     vector<string> opts;
     vector<const char *> opts_str;
@@ -550,8 +561,11 @@ public:
                            py::array_t<uint8_t> &packet, bool append) {
     if (!upEncoder) {
       upEncoder.reset(NvencEncodeFrame::Make(
-          CudaResMgr::Instance().GetStream(gpuId),
-          CudaResMgr::Instance().GetCtx(gpuId), initParam,
+          //CudaResMgr::Instance().GetStream(gpuId),
+          //CudaResMgr::Instance().GetCtx(gpuId), initParam,
+          cuStream,
+          cuContext,
+          initParam,
           NV_ENC_BUFFER_FORMAT_NV12, encWidth, encHeight));
     }
 
@@ -586,9 +600,11 @@ public:
   }
 
   bool EncodeSingleFrame(py::array_t<uint8_t> &inRawFrame,
-                         py::array_t<uint8_t> &packet) {
+                         py::array_t<uint8_t> &packet,
+                         uint64_t stream) {
     if (!uploader) {
-      uploader.reset(new PyFrameUploader(encWidth, encHeight, eFormat, gpuId));
+      auto cuStream = (CUstream)stream;
+      uploader.reset(new PyFrameUploader(encWidth, encHeight, eFormat, stream));
     }
 
     return EncodeSingleSurface(uploader->UploadSingleFrame(inRawFrame), packet,
@@ -709,7 +725,7 @@ PYBIND11_MODULE(PyNvCodec, m) {
            py::return_value_policy::take_ownership);
 
   py::class_<PyNvEncoder>(m, "PyNvEncoder")
-      .def(py::init<const map<string, string> &, int>())
+      .def(py::init<const map<string, string> &, uint64_t>())
       .def("Width", &PyNvEncoder::Width)
       .def("Height", &PyNvEncoder::Height)
       .def("Format", &PyNvEncoder::GetPixelFormat)
@@ -718,7 +734,7 @@ PYBIND11_MODULE(PyNvCodec, m) {
       .def("Flush", &PyNvEncoder::Flush);
 
   py::class_<PyNvDecoder>(m, "PyNvDecoder")
-      .def(py::init<const string &, int>())
+      .def(py::init<const string &, uint64_t>())
       .def("Width", &PyNvDecoder::Width)
       .def("Height", &PyNvDecoder::Height)
       .def("Framerate", &PyNvDecoder::Framerate)
@@ -729,8 +745,7 @@ PYBIND11_MODULE(PyNvCodec, m) {
       .def("DecodeSingleFrame", &PyNvDecoder::DecodeSingleFrame);
 
   py::class_<PyFrameUploader>(m, "PyFrameUploader")
-      .def(py::init<uint32_t, uint32_t, Pixel_Format, uint32_t>())
-      .def("Format", &PyFrameUploader::GetFormat)
+      .def(py::init<uint32_t, uint32_t, Pixel_Format, uint64_t>())
       .def("UploadSingleFrame", &PyFrameUploader::UploadSingleFrame,
            py::return_value_policy::take_ownership);
 
@@ -741,8 +756,7 @@ PYBIND11_MODULE(PyNvCodec, m) {
            &PySurfaceDownloader::DownloadSingleSurface);
 
   py::class_<PySurfaceConverter>(m, "PySurfaceConverter")
-      .def(py::init<uint32_t, uint32_t, Pixel_Format, Pixel_Format, uint32_t>())
-      .def("Format", &PySurfaceConverter::GetFormat)
+      .def(py::init<uint32_t, uint32_t, Pixel_Format, Pixel_Format, uint64_t>())
       .def("Execute", &PySurfaceConverter::Execute,
            py::return_value_policy::take_ownership);
 
