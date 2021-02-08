@@ -196,15 +196,19 @@ class PySurfaceDownloader {
 
 public:
   PySurfaceDownloader(uint32_t width, uint32_t height, Pixel_Format format,
-                      uint32_t gpu_ID) {
-    gpuID = gpu_ID;
+                      uint64_t stream) {
+    //gpuID = gpu_ID;
     surfaceWidth = width;
     surfaceHeight = height;
     surfaceFormat = format;
 
+    CUcontext cuContext = nullptr;
+    auto cuStream = (CUstream)stream;
+    auto success = cuStreamGetCtx(cuStream, &cuContext);
+
     upDownloader.reset(
-        CudaDownloadSurface::Make(CudaResMgr::Instance().GetStream(gpuID),
-                                  CudaResMgr::Instance().GetCtx(gpuID),
+        CudaDownloadSurface::Make(cuStream,//CudaResMgr::Instance().GetStream(gpuID),
+                                  cuContext,//CudaResMgr::Instance().GetCtx(gpuID),
                                   surfaceWidth, surfaceHeight, surfaceFormat));
   }
 
@@ -741,7 +745,7 @@ PYBIND11_MODULE(PyNvCodec, m) {
            py::return_value_policy::move);
 
   py::class_<PySurfaceDownloader>(m, "PySurfaceDownloader")
-      .def(py::init<uint32_t, uint32_t, Pixel_Format, uint32_t>())
+      .def(py::init<uint32_t, uint32_t, Pixel_Format, uint64_t>())
       .def("DownloadSingleSurface",
            &PySurfaceDownloader::DownloadSingleSurface);
 
